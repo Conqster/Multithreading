@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="MultiCore4Physics.vcxproj" Id="bd87212f-b871-4836-87b4-717a6da7176f" />
+</Solution>
