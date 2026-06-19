@@ -12,3 +12,12 @@ public:
 	NonCopyable(const NonCopyable&) = delete;
 	void  operator=(const NonCopyable&) = delete;
 };
+
+
+namespace Utils{
+	template<typename T>
+	constexpr T WrapPowerof2(const T& value, const T& end)
+	{
+		return value & end;
+	}
+}

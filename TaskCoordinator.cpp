@@ -15,7 +15,16 @@ void TaskCoordinatorThreads::BeginThreads(int thread_count)
 
 	mOnQuitThreads = false;
 
+	ASSERT(thread_count < kMaxThreads);
 	ASSERT(mWorkers.empty());
+
+#if LOCKFREE_CAS_QUEUE
+	for (auto& t : mPendingTasks)
+		t = nullptr;
+
+	mNumWorkerThread = thread_count;
+#endif LOCKFREE_CAS_QUEUE
+
 
 	mWorkers.reserve(thread_count);
 	for (int i = 0; i < thread_count; ++i)
@@ -38,6 +47,18 @@ void TaskCoordinatorThreads::EndThreads()
 	mWorkers.clear();
 
 	/// any left jobs 
+#if LOCKFREE_CAS_QUEUE
+	if (mAvailableTaskCount.load() > 0)
+	{
+		for (auto& t : mPendingTasks)
+		{
+			Task* _t = t.load();
+			_t->Process();
+			delete _t;
+			t = nullptr;
+		}
+	}
+#else
 	for (auto& task : mTasks)
 	{
 		task->Process();
@@ -46,6 +67,7 @@ void TaskCoordinatorThreads::EndThreads()
 	}
 
 	mTasks.clear();
+#endif // LOCKFREE_CAS_QUEUE
 }
 
 #include <windows.h>
@@ -92,6 +114,47 @@ void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 		_name += std::to_string(thread_worker_idx);
 		SetThreadName(_name.c_str());
 	}
+
+
+#if LOCKFREE_CAS_QUEUE
+	while (!mOnQuitThreads)
+	{
+		//wait no task, semaphore
+		uint32_t avail_task = 0;
+		{
+			std::unique_lock<std::mutex> no_task_lock(mTaskQueueMutex);
+
+			mTaskAvailable.wait(no_task_lock, [this, &avail_task]()
+				{
+					avail_task = mAvailableTaskCount.load(std::memory_order_relaxed);
+					return avail_task > 0;
+				});
+		}
+
+		//after lock release, quick notify just incase of delay
+		SignalAvailableTask(avail_task);
+		if (mMainThreadWaitingTask)
+			/// task_count - 1, has another could have be notified
+			SignalMainThread(avail_task - 1);
+
+
+		Task* task = nullptr;
+		task = mPendingTasks[Utils::WrapPowerof2(mThreadTaskHead[thread_worker_idx], mTopPendingTasks - 1)].exchange(nullptr);
+		//null means no task at slot or other thread pickup 
+		if (task)
+		{
+			task->Process();
+			//might have to delete heap allocated 
+			delete task;
+			//quick consume work counter and was successful 
+			///but the means that the notify needs to be accurate 
+			mAvailableTaskCount.fetch_sub(1, std::memory_order_acq_rel);
+			THREAD_LOG_MSG(mThreadLogMutex, "____    Thread " << thread_worker_idx << " complete a Task. _____ Task Active: " << mProcessingTasks.load(std::memory_order_relaxed) << ".\n");
+		}
+		mThreadTaskHead[thread_worker_idx]++; //progress
+	}
+#else
+
 	while (!mOnQuitThreads)
 	{
 		_TaskBase* task = nullptr;
@@ -137,30 +200,27 @@ void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 
 		THREAD_LOG_MSG(mThreadLogMutex, "____    Thread " << thread_worker_idx << " complete a Task. _____ Task Active: " << mProcessingTasks.load(std::memory_order_relaxed) << ".\n");
 	}
+
+#endif // LOCKFREE_CAS_QUEUE
 	THREAD_LOG_MSG(mThreadLogMutex, "____    Thread " << thread_worker_idx << " done. _____\n");
 }
 
 void TaskCoordinatorThreads::EnqueueTask(Task* task)
 {
 	size_t task_count = 0;
-	{
-		std::lock_guard<std::mutex> queue_mutex(mTaskQueueMutex);
-		mTasks.push_back(task);
-		task_count = mTasks.size();
-	}
 
 #if LOCKFREE_CAS_QUEUE
-
-
-	uint32_t pending_task_head = 0;
+	uint32_t pending_task_head = ComputeMinThreadHead();
+	
 	for (;;)
 	{
 		uint32_t pending_top = mTopPendingTasks.load();
 		if (pending_task_head == mTopPendingTasks.load(std::memory_order_relaxed))
 		{
-
-			pending_task_head = 0;
+			///if at the end 
+			///wait and try again, might when to start at zero
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			pending_task_head = ComputeMinThreadHead();
 		}
 
 		Task* slot_expect = nullptr;
@@ -171,61 +231,88 @@ void TaskCoordinatorThreads::EnqueueTask(Task* task)
 
 		if (succuss_add)
 		{
+			break;
+		}
 
+		//move to the next if CAS failed 
+		pending_task_head++;
+
+
+
+		uint32_t pending_top = mTopPendingTasks.load();
+		if(pending_task_head >= pending_top)
+		{
+			mTopPendingTasks.compare_exchange_strong(pending_top, pending_top + 1);//top is still top and then increament
+
+			///we have reacg the end of already allocated 
+			if (pending_task_head >= kMaxTaskQueue)
+			{
+				///there are 2 options here: 
+				/// 1-> poke threads to do some work 
+				///		so to have some space to right 
+				///		has buffer/queue is full. 
+				///		i.e signal, wait few microseconds then continue
+				/// 
+				/// 2-> reset head, put we are using wrap so this is not an issue 
+				///		it would reset naturally. 
+				///		meaning if max is 5 and the pending task head is >5 i.e 6 
+				///		it would cause thois branch to be hit and stuck 
+				///		so the hope is that thread head should be adjusted to wrap value 
+				///		
+				///if at the end 
+				///wait and try again, might when to start at zero
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+				pending_task_head = ComputeMinThreadHead();
+				continue;
+			}
+		}
+
+
+		Task* slot_expect = nullptr;
+		bool succuss_add = mPendingTasks[Utils::WrapPowerof2(pending_task_head, kMaxTaskQueue - 1)].compare_exchange_strong(slot_expect, task);
+
+		//new top 
+		//mTopPendingTasks.compare_exchange_strong(pending_top, pending_top + 1);//top is still top and then increament
+
+		if (succuss_add)
+		{
+			mAvailableTaskCount.fetch_add(1);
 			break;
 		}
 
 		//move to the next if CAS failed 
 		pending_task_head++;
 	}
-	mTopPendingTasks = 5;
+
 	task_count = mAvailableTaskCount.load(std::memory_order_relaxed);
 
-	//for job accepting task
-	uint32_t thread_head = 0;
-	while (true)
+#else
 	{
-		//wait no task
-		{
-			std::unique_lock<std::mutex> no_task_lock(mTaskQueueMutex);
-
-			uint32_t avail_task;
-			mTaskAvailable.wait(no_task_lock, [this, &avail_task]()
-				{
-					avail_task = mAvailableTaskCount.load(std::memory_order_relaxed);
-					return avail_task > 0;
-				});
-
-			//quick consume work counter 
-			///but the means that the notify needs to be accurate 
-			mAvailableTaskCount.fetch_sub(1, std::memory_order_relaxed);
-		}
-
-
-		Task* task = nullptr;
-		task = mPendingTasks[thread_head & (mTopPendingTasks - 1)].exchange(nullptr);
-		//null means no task at slot or other thread pickup 
-		if (task)
-		{
-
-		}
-		thread_head++; //progress
+		std::lock_guard<std::mutex> queue_mutex(mTaskQueueMutex);
+		mTasks.push_back(task);
+		task_count = mTasks.size();
 	}
+
 #endif // LOCKFREE_CAS_QUEUE
 
-
 	//signal/notify threads waiting on flag
-	//mJobFlag.notify_one();
 	SignalAvailableTask(task_count);
-
 	if (mMainThreadWaitingTask)
-		/// task_count - 1, has another could have be notified
-		SignalMainThread(task_count - 1);
+		SignalMainThread(task_count - 1);/// task_count - 1, has another could have be notified
 }
 
 void TaskCoordinatorThreads::EnqueueTasks(Task** tasks, uint32_t count)
 {
+
 	size_t task_count = 0;
+#if LOCKFREE_CAS_QUEUE
+	for (Task** task = tasks, **task_end = tasks + count;
+		task < task_end; ++task)
+	{
+		EnqueueTask(*task);
+	}
+	//each enqueue notifies
+#else
 	{
 		std::lock_guard<std::mutex> queue_mutex(mTaskQueueMutex);
 
@@ -237,13 +324,13 @@ void TaskCoordinatorThreads::EnqueueTasks(Task** tasks, uint32_t count)
 
 		task_count = mTasks.size();
 	}
-	//signal/notify threads waiting on flag
-	//mJobFlag.notify_one();
-	SignalAvailableTask(task_count);
 
+	//signal/notify threads waiting on flag
+//mJobFlag.notify_one();
+	SignalAvailableTask(task_count);
 	if (mMainThreadWaitingTask)
-		/// task_count - 1, has another could have be notified
-		SignalMainThread(task_count - 1);
+		SignalMainThread(task_count - 1);/// task_count - 1, has another could have be notified
+#endif // LOCKFREE_CAS_QUEUE
 }
 
 void TaskCoordinatorThreads::SignalMainThread(size_t task_count)
@@ -263,6 +350,50 @@ void TaskCoordinatorThreads::WaitForTasks()
 	//for helping out 
 	_TaskBase* task;
 
+	///later while waiting for task 
+	///also support quit break as well
+#if LOCKFREE_CAS_QUEUE
+	while (!mOnQuitThreads)
+	{
+		THREAD_LOG_MSG(mThreadLogMutex, "____  Main Thread is waiting for " << mAvailableTaskCount.load(std::memory_order_relaxed) << " tasks and " << mProcessingTasks << " active tasks to complete_____\n");
+		//wait no task, semaphore
+		uint32_t avail_task = 0;
+		{
+			std::unique_lock<std::mutex> no_task_lock(mTaskQueueMutex);
+
+			mMainWaitFlag.wait(no_task_lock, [this, &avail_task]()
+				{
+					avail_task = mAvailableTaskCount.load(std::memory_order_relaxed);
+					return avail_task > 0 || mProcessingTasks.load(std::memory_order_relaxed) < 0;
+				});
+
+			if (avail_task < 0 && mProcessingTasks.load(std::memory_order_relaxed) <= 0) //check the job job quueue just incase of race condition 
+				break;
+		}
+
+		//after lock release, quick notify just incase of delay
+		SignalAvailableTask(avail_task);
+		if (mMainThreadWaitingTask)
+			/// task_count - 1, has another could have be notified
+			SignalMainThread(avail_task - 1);
+
+
+		Task* task = nullptr;
+		task = mPendingTasks[Utils::WrapPowerof2(mThreadTaskHead[mNumWorkerThread], mTopPendingTasks - 1)].exchange(nullptr);
+		//null means no task at slot or other thread pickup 
+		if (task)
+		{
+			task->Process();
+			//might have to delete heap allocated 
+			delete task;
+			//quick consume work counter and was successful 
+			///but the means that the notify needs to be accurate 
+			mAvailableTaskCount.fetch_sub(1, std::memory_order_acq_rel);
+			THREAD_LOG_MSG(mThreadLogMutex, "____    MainThread complete a task._____\n");
+		}
+		mThreadTaskHead[mNumWorkerThread]++; //progress
+	}
+#else
 	//wait to .2 of a sec for a signal. 
 	//std::unique_lock<std::mutex> queue_mutex(m_JobPool.m_PoolMutex);
 	//std::unique_lock<std::mutex> queue_mutex(mJobQueueMutex);
@@ -276,7 +407,12 @@ void TaskCoordinatorThreads::WaitForTasks()
 		
 		///help out 
 		{
-			std::unique_lock<std::mutex> queue_mutex(mTaskQueueMutex);
+			std::unique_lock<std::mutex> queue_mutex(mTaskQueueMutex); 
+			////this is bad main thread does not release mutex lock, when job and other thread are processing
+
+			mMainWaitFlag.wait(queue_mutex, [this]() {
+				return !mTasks.empty() || (mProcessingTasks.load(std::memory_order_relaxed) <= 0);
+				});
 
 			if (mTasks.empty() && mProcessingTasks.load(std::memory_order_relaxed) <= 0) //check the job job quueue just incase of race condition 
 				break;
@@ -298,9 +434,9 @@ void TaskCoordinatorThreads::WaitForTasks()
 				task = nullptr;
 				//maybe later have a cascade wrap for multiple cv
 				//sleep if no job, but is new job (rare) or active job finised
-				mMainWaitFlag.wait(queue_mutex, [this]() {
-					return !mTasks.empty() || (mProcessingTasks.load(std::memory_order_relaxed) <= 0);
-					});
+				//mMainWaitFlag.wait(queue_mutex, [this]() {
+				//	return !mTasks.empty() || (mProcessingTasks.load(std::memory_order_relaxed) <= 0);
+				//	});
 
 				//wrap check
 				continue;
@@ -324,11 +460,11 @@ void TaskCoordinatorThreads::WaitForTasks()
 			//mThreadLogMutex.unlock();
 			mProcessingTasks.fetch_sub(1, std::memory_order_relaxed);
 
-			THREAD_LOG_MSG(mThreadLogMutex, "____    MainThread " << std::this_thread::get_id() << " complete a task._____\n");
+			THREAD_LOG_MSG(mThreadLogMutex, "____    MainThread complete a task._____\n");
 		}
 
 	}
-
+#endif LOCKFREE_CAS_QUEUE
 	mMainThreadWaitingTask = false;
 	THREAD_LOG_MSG(mThreadLogMutex, "Thread Work finished !!!!!!!\n");
 }

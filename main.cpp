@@ -428,8 +428,7 @@ int main()
 
 	ProgramContext ctx;
 #if MULTITHREADED_TASKCOORD
-	TaskCoordinatorThreads* task_coord = new TaskCoordinatorThreads;
-	task_coord->Init(num_threads);
+	TaskCoordinatorThreads* task_coord = new TaskCoordinatorThreads(num_threads);
 #else
 	TaskCoordinatorSequential* task_coord = new TaskCoordinatorSequential;
 #endif // MULTITHREADED_TASKCOORD

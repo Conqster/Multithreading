@@ -235,11 +235,12 @@ class TaskCoordinatorThreads : public TaskCoordinator
 public:
 
 	TaskCoordinatorThreads() = default;
-	TaskCoordinatorThreads(int thread_count) : mNumThread(thread_count) {}
+	TaskCoordinatorThreads(int thread_count = -1) //: mNumThread(thread_count) 
+	{
+		BeginThreads(thread_count);
+	}
 
 	~TaskCoordinatorThreads() { EndThreads(); }
-
-	void Init(int thread_count) { BeginThreads(thread_count); }
 
 	Task* ConstructTask(const TaskFunction& task_func, uint32_t dependencies) override
 	{
@@ -305,6 +306,8 @@ public:
 private:
 	void ThreadsMainLoop(int thread_worker_idx);
 
+	/// if thread count is 0 or less, 
+	/// the coordinator use max hardward supported count
 	void BeginThreads(int thread_count);
 	/// Terminates threads
 	void EndThreads();
@@ -335,8 +338,9 @@ private:
 	/// if the address is within the allocation 
 	/// region then this task belong to task coordinator 
 private:
-	int mNumThread = 0;
+	//int mNumThread = 0;
 	bool mOnQuitThreads = false;
+	static constexpr int kMaxThreads = 32;
 	std::vector<std::thread> mWorkers;
 	std::mutex mThreadLogMutex;
 
@@ -348,9 +352,30 @@ private:
 
 	/// pending tasks
 #if LOCKFREE_CAS_QUEUE
-	std::array<std::atomic<Task*>, 1024> mPendingTasks;
+	static constexpr uint32_t kMaxTaskQueue = 1024; //need to be power of 2 to support wrapping
+
+	std::array<std::atomic<Task*>, kMaxTaskQueue> mPendingTasks;
 	std::atomic<uint32_t> mTopPendingTasks = 0;
 	std::atomic<uint32_t> mAvailableTaskCount = 0;
+
+	/// mainly used to access the Main thread task head
+	uint32_t mNumWorkerThread = 0;
+	uint32_t mThreadTaskHead[kMaxThreads + 1]; //extra space to main thread, during task waiting
+
+	/// min head, based on the firtst/small thread head
+	/// to ensure task gravitates around thread scan window
+	/// reduncing threads from wasting clock cyles scanning empty 
+	/// mem region
+	uint32_t ComputeMinThreadHead()
+	{
+		uint32_t temp = mThreadTaskHead[0];
+		for (int i = 1; i < mWorkers.size() + 1; ++i) //+1 as the main thread uses the slot to last work thread
+		{
+			temp = std::min(pending_task_head, mThreadTaskHead[i]);
+		}
+
+		return temp;
+	}
 #else
 	std::deque<Task*> mTasks;
 #endif // LOCKFREE_CAS_QUEUE
