@@ -22,10 +22,11 @@ void TaskCoordinatorThreads::BeginThreads(int thread_count)
 	for (auto& t : mPendingTasks)
 		t = nullptr;
 
-	mTopPendingTasks = 0;
+	mPendingTasksTail = 0;
 	mAvailableTaskCount = 0;
 
 	mNumWorkerThread = thread_count;
+	mNumActiveWorkerThread = thread_count;
 
 	/// ensure mThreadTaskHead data is int/ trivial 
 	//std::fill(mThreadTaskHead, &mThreadTaskHead[kMaxThreads + 1], 0);
@@ -61,15 +62,17 @@ void TaskCoordinatorThreads::EndThreads()
 		for (auto& t : mPendingTasks)
 		{
 			Task* _t = t.load();
+			if (_t == nullptr) continue;
 			_t->Process();
 			delete _t;
 			t = nullptr;
 		}
 	}
 
-	mTopPendingTasks = 0;
+	mPendingTasksTail = 0;
 	mAvailableTaskCount = 0;
 	mNumWorkerThread = 0;
+	mNumActiveWorkerThread = 0;
 
 	std::memset(mThreadTaskHead, 0, sizeof(mThreadTaskHead));
 #else
@@ -139,11 +142,13 @@ void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 		{
 			std::unique_lock<std::mutex> no_task_lock(mTaskQueueMutex);
 
-			mTaskAvailable.wait(no_task_lock, [this, &avail_task, &thread_worker_idx]()
+			mTaskAvailable.wait(no_task_lock, [this, &avail_task]()
 				{
 					avail_task = mAvailableTaskCount.load(std::memory_order_relaxed);
 					return avail_task > 0 || mOnQuitThreads;
 				});
+
+
 			if (mOnQuitThreads)
 				break;
 		}
@@ -151,7 +156,7 @@ void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 
 		///need to fix if awake, and there is task and not at tail 
 		/// instead of sleeping, scan till tail before sleep
-		while(mThreadTaskHead[thread_worker_idx] != mTopPendingTasks.load())
+		while(mThreadTaskHead[thread_worker_idx] != mPendingTasksTail.load())
 		{
 			/// after lock release, quick notify just incase of delay
 			/// notify - 1; because might get the task 
@@ -189,6 +194,8 @@ void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 				THREAD_LOG_MSG(mThreadLogMutex, "____    Thread " << thread_worker_idx << " complete a Task. _____ Task Active: " << mProcessingTasks.load(std::memory_order_relaxed) << ".\n");
 			}
 			mThreadTaskHead[thread_worker_idx]++; //progress
+
+			SignalMainThread(1);
 
 			//check reflection to prevent, unnecessary scanning 
 			avail_task = mAvailableTaskCount.load(std::memory_order_relaxed);
@@ -270,9 +277,10 @@ void TaskCoordinatorThreads::EnqueueTask(Task* task)
 	/// 
 	///
 	uint32_t capture_min_head = ComputeMinThreadHead();
+	uint32_t dummy_wake = 0;
 	for (;;)
 	{
-		uint32_t curr_task_tail = mTopPendingTasks;
+		uint32_t curr_task_tail = mPendingTasksTail;
 		//far back head (min) and tail range
 		if (curr_task_tail - capture_min_head >= kMaxTaskQueue)
 		{
@@ -282,7 +290,16 @@ void TaskCoordinatorThreads::EnqueueTask(Task* task)
 			/// to catch up
 			if (curr_task_tail - capture_min_head >= kMaxTaskQueue)
 			{
+				///hack as semaphore to wake 
+				mAvailableTaskCount.fetch_add(1, std::memory_order_relaxed);
+				dummy_wake++;
 				PokeWorkers();
+				//THREAD_LOG_MSG("Waiting to add more tasks, poked workers \n");
+				//{
+				//	mThreadLogMutex.lock(); \
+				//	LOG_MSG("Waiting to add more task, poked workers \n"); \
+				//	mThreadLogMutex.unlock();
+				//}
 				std::this_thread::sleep_for(std::chrono::microseconds(100));
 				continue;
 			}
@@ -293,7 +310,7 @@ void TaskCoordinatorThreads::EnqueueTask(Task* task)
 
 		/// move to the next if CAS failed
 		/// 
-		mTopPendingTasks.compare_exchange_strong(curr_task_tail, curr_task_tail + 1);
+		mPendingTasksTail.compare_exchange_strong(curr_task_tail, curr_task_tail + 1);
 
 		/// new tail 
 		/// task was add to curr end of pending task
@@ -306,6 +323,7 @@ void TaskCoordinatorThreads::EnqueueTask(Task* task)
 	}
 	//reload task available for trigging
 	task_count = mAvailableTaskCount.load(std::memory_order_relaxed);
+	
 
 #else
 	{
@@ -322,16 +340,93 @@ void TaskCoordinatorThreads::EnqueueTask(Task* task)
 		SignalMainThread(task_count - 1);/// task_count - 1, has another could have be notified
 }
 
-void TaskCoordinatorThreads::EnqueueTasks(Task** tasks, uint32_t count)
+void TaskCoordinatorThreads::EnqueueTasks(Task** tasks, const uint32_t count)
 {
 	size_t task_count = 0;
 #if LOCKFREE_CAS_QUEUE
-	for (Task** task = tasks, **task_end = tasks + count;
-		task < task_end; ++task)
+	//for (Task** task = tasks, **task_end = tasks + count;
+	//	task < task_end; ++task)
+	//	EnqueueTask(*task);
+
+	////each enqueue notifies
+
+	/// use the far head (min) and tail, to capture immediate task range
+	/// 
+	/// bitwise wrap is used
+	/// keep adjusting pending tail, until success 
+	/// 
+	/// but if the range btw far back head (min) and tail greater then pendable task
+	/// 
+	/// recompute far head as worker should have completed some task which might have 
+	/// reduce the range, so to continue adjusting the tail. 
+	/// 
+	/// but after recomputing, it must have mean that the buffer is completely full.
+	///  poke all worker thread , then go to quick few microsecond sleep to retry
+	/// 
+	
+
+	//Task** curr_task = tasks;
+	//Task** task_end = tasks + count;
+
+	uint32_t queued_pointer = 0;
+	uint32_t dummy_wake = 0;
+	uint32_t capture_min_head = ComputeMinThreadHead();
+	for (;;)
 	{
-		EnqueueTask(*task);
+		uint32_t curr_task_tail = mPendingTasksTail;
+		//far back head (min) and tail range
+		if (curr_task_tail - capture_min_head >= kMaxTaskQueue)
+		{
+			//recapute far back head min
+			capture_min_head = ComputeMinThreadHead();
+			/// is the range still greater, wait for worker thread
+			/// to catch up
+			if (curr_task_tail - capture_min_head >= kMaxTaskQueue)
+			{
+				///hack as semaphore to wake 
+				mAvailableTaskCount.fetch_add(1, std::memory_order_relaxed);
+				dummy_wake++;
+				PokeWorkers();
+				////THREAD_LOG_MSG("Waiting to add a task, poked workers \n");
+				//{
+				//	mThreadLogMutex.lock(); \
+				//	LOG_MSG("Waiting to add a task, poked workers \n"); \
+				//	mThreadLogMutex.unlock();
+				//}
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+				continue;
+			}
+		}
+
+		Task* t_expect = nullptr;
+		//bool succuss_add = mPendingTasks[Utils::WrapPowerof2(curr_task_tail, kMaxTaskQueue - 1)].compare_exchange_strong(t_expect, *curr_task);
+		bool succuss_add = mPendingTasks[Utils::WrapPowerof2(curr_task_tail, kMaxTaskQueue - 1)].compare_exchange_strong(t_expect, tasks[queued_pointer]);
+
+		/// move to the next if CAS failed
+		/// 
+		mPendingTasksTail.compare_exchange_strong(curr_task_tail, curr_task_tail + 1);
+
+		/// new tail 
+		/// task was add to curr end of pending task
+		if (succuss_add)
+		{
+			//for debug
+			mAvailableTaskCount.fetch_add(1);
+
+			queued_pointer++;
+			if (queued_pointer >= count)
+				break;
+			//curr_task++;
+			//if(curr_task >= task_end)
+			//	break;
+		}
 	}
-	//each enqueue notifies
+	//reload task available for trigging
+	task_count = mAvailableTaskCount.load(std::memory_order_relaxed);
+	
+	SignalAvailableTask(task_count);
+	if (mMainThreadWaitingTask)
+		SignalMainThread(task_count - 1);/// task_count - 1, has another could have be notified
 #else
 	{
 		std::lock_guard<std::mutex> queue_mutex(mTaskQueueMutex);
@@ -366,6 +461,8 @@ void TaskCoordinatorThreads::WaitForTasks()
 {
 	THREAD_LOG_MSG(mThreadLogMutex, "Wating for tasks completion.......!\n");
 
+
+
 	mMainThreadWaitingTask = true;
 	//for helping out 
 	_TaskBase* task;
@@ -373,6 +470,11 @@ void TaskCoordinatorThreads::WaitForTasks()
 	///later while waiting for task 
 	///also support quit break as well
 #if LOCKFREE_CAS_QUEUE
+
+	/// for hack catch up 
+	mThreadTaskHead[mWorkers.size()] = ComputeMinThreadHead();
+	mNumActiveWorkerThread = mNumWorkerThread + 1;
+
 	while (!mOnQuitThreads)
 	{
 		THREAD_LOG_MSG(mThreadLogMutex, "____  Main Thread is waiting for " << mAvailableTaskCount.load(std::memory_order_relaxed) << " tasks and " << mProcessingTasks << " active tasks to complete_____\n");
@@ -391,38 +493,89 @@ void TaskCoordinatorThreads::WaitForTasks()
 				break;
 		}
 
-		/// after lock release, quick notify just incase of delay
-		/// notify - 1; because might get the task 
-		/// but its not guaranteed
-		SignalAvailableTask(avail_task - 1);
-		if (mMainThreadWaitingTask)
-			SignalMainThread(avail_task - 2); /// task_count - 1, has another could have be notified
+		///// after lock release, quick notify just incase of delay
+		///// notify - 1; because might get the task 
+		///// but its not guaranteed
+		//SignalAvailableTask(avail_task - 1);
+		//if (mMainThreadWaitingTask)
+		//	SignalMainThread(avail_task - 2); /// task_count - 1, has another could have be notified
 
 
-		Task* task = nullptr;
-		task = mPendingTasks[Utils::WrapPowerof2(mThreadTaskHead[mNumWorkerThread].load(std::memory_order_relaxed), kMaxTaskQueue - 1)].exchange(nullptr);
-		//null means no task at slot or other thread pickup 
-		if (task)
+		//Task* task = nullptr;
+		//task = mPendingTasks[Utils::WrapPowerof2(mThreadTaskHead[mNumWorkerThread].load(std::memory_order_relaxed), kMaxTaskQueue - 1)].exchange(nullptr);
+		////null means no task at slot or other thread pickup 
+		//if (task)
+		//{
+		//	/// if we actual get the task 
+		//	/// quick consume work counter and was successful 
+		//	///but the means that the notify needs to be accurate 
+		//	mAvailableTaskCount.fetch_sub(1, std::memory_order_acq_rel);
+
+		//	/// we will be processing the so the waiting thread for processing task will be aware
+		//	mProcessingTasks.fetch_add(1, std::memory_order_relaxed);
+
+		//	task->Process();
+
+		//	//we are done processing 
+		//	mProcessingTasks.fetch_sub(1, std::memory_order_relaxed);
+
+		//	//might have to delete heap allocated 
+		//	delete task;
+		//	THREAD_LOG_MSG(mThreadLogMutex, "____    MainThread complete a task._____\n");
+		//}
+		//mThreadTaskHead[mNumWorkerThread]++; //progress
+
+
+
+		///need to fix if awake, and there is task and not at tail 
+		/// instead of sleeping, scan till tail before sleep
+		while (mThreadTaskHead[mNumWorkerThread] != mPendingTasksTail.load())
 		{
-			/// if we actual get the task 
-			/// quick consume work counter and was successful 
-			///but the means that the notify needs to be accurate 
-			mAvailableTaskCount.fetch_sub(1, std::memory_order_acq_rel);
+			/// after lock release, quick notify just incase of delay
+			/// notify - 1; because might get the task 
+			/// but its not guaranteed
+			SignalAvailableTask(avail_task - 1);
+			if (mMainThreadWaitingTask)
+				SignalMainThread(avail_task - 2); /// task_count - 1, has another could have be notified
 
-			/// we will be processing the so the waiting thread for processing task will be aware
-			mProcessingTasks.fetch_add(1, std::memory_order_relaxed);
 
-			task->Process();
+			Task* task = nullptr;
+			task = mPendingTasks[Utils::WrapPowerof2(mThreadTaskHead[mNumWorkerThread].load(), kMaxTaskQueue - 1)].exchange(nullptr);
 
-			//we are done processing 
-			mProcessingTasks.fetch_sub(1, std::memory_order_relaxed);
+			//null means no task at slot or other thread pickup 
+			if (task)
+			{
+				/// if we actual get the task 
+				/// quick consume work counter and was successful 
+				///but the means that the notify needs to be accurate 
+				mAvailableTaskCount.fetch_sub(1, std::memory_order_acq_rel);
 
-			//might have to delete heap allocated 
-			delete task;
-			THREAD_LOG_MSG(mThreadLogMutex, "____    MainThread complete a task._____\n");
+				/// we will be processing the so the waiting thread for processing task will be aware
+				mProcessingTasks.fetch_add(1, std::memory_order_relaxed);
+
+				task->Process();
+
+				//we are done processing 
+				mProcessingTasks.fetch_sub(1, std::memory_order_relaxed);
+
+				//might have to delete heap allocated 
+				delete task;
+				THREAD_LOG_MSG(mThreadLogMutex, "____    MainThread complete a task._____\n");
+			}
+			mThreadTaskHead[mNumWorkerThread]++; //progress
+
+			//check reflection to prevent, unnecessary scanning 
+			avail_task = mAvailableTaskCount.load(std::memory_order_relaxed);
+			if (avail_task <= 0)
+				break;
 		}
-		mThreadTaskHead[mNumWorkerThread]++; //progress
+
+		if (mProcessingTasks.load(std::memory_order_relaxed) <= 0)
+			break;
 	}
+
+	mNumActiveWorkerThread = mNumWorkerThread;
+
 #else
 	//wait to .2 of a sec for a signal. 
 	//std::unique_lock<std::mutex> queue_mutex(m_JobPool.m_PoolMutex);

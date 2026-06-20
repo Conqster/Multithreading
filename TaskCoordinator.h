@@ -234,7 +234,7 @@ class TaskCoordinatorThreads : public TaskCoordinator
 {
 public:
 
-	TaskCoordinatorThreads() = default;
+	//TaskCoordinatorThreads() = default;
 	TaskCoordinatorThreads(int thread_count = -1) //: mNumThread(thread_count) 
 	{
 		BeginThreads(thread_count);
@@ -370,11 +370,13 @@ private:
 	static constexpr uint32_t kMaxTaskQueue = 1024; //need to be power of 2 to support wrapping
 
 	std::array<std::atomic<Task*>, kMaxTaskQueue> mPendingTasks;
-	std::atomic<uint32_t> mTopPendingTasks = 0;
+	std::atomic<uint32_t> mPendingTasksTail = 0;
 	std::atomic<uint32_t> mAvailableTaskCount = 0;
 
 	/// mainly used to access the Main thread task head
 	uint32_t mNumWorkerThread = 0;
+	uint32_t mNumActiveWorkerThread = 0;
+
 	std::atomic<uint32_t> mThreadTaskHead[kMaxThreads + 1]; //extra space to main thread, during task waiting
 	static_assert(std::is_integral_v<std::remove_reference_t<decltype(mThreadTaskHead[0])>::value_type>);
 	static_assert(sizeof(mThreadTaskHead[0]) == 4);
@@ -385,8 +387,11 @@ private:
 	/// mem region
 	uint32_t ComputeMinThreadHead()
 	{
+		///just to check if main thread is participating
+		//uint32_t workers = (mMainThreadWaitingTask) ? mWorkers.size() + 1 : mWorkers.size();
+		uint32_t workers = mNumActiveWorkerThread;
 		uint32_t temp = mThreadTaskHead[0];
-		for (int i = 1; i < mWorkers.size() + 1; ++i) //+1 as the main thread uses the slot to last work thread
+		for (int i = 1; i < workers; ++i) //+1 as the main thread uses the slot to last work thread
 			temp = std::min(temp, mThreadTaskHead[i].load());
 		return temp;
 	}

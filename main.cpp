@@ -494,8 +494,22 @@ int main()
 	double mLastFrameTime = glfwGetTime();
 	float time_scale = 0.5f;
 
+	re_run_task_loop:
+	system("cls");
 	std::vector<float> list_duration;
 	list_duration.reserve(100);
+
+	if (task_coord == nullptr)
+#if MULTITHREADED_TASKCOORD
+		task_coord = new TaskCoordinatorThreads;
+#else
+		task_coord = new TaskCoordinatorSequential;
+#endif // MULTITHREADED_TASKCOORD
+	//tasks 
+	Task* add_extra_cell_detail_task = nullptr;
+	Task* add_extra_cell_detail_task2 = nullptr;
+	Task* build_solve_particle_task = nullptr;
+	std::vector<Task*> solve_particle_tasks;
 	//job_coord.BeginThreads(num_threads);
 	for (int i = 0; i < 100; ++i)
 	{
@@ -552,10 +566,10 @@ int main()
 
 
 			//tasks 
-			Task* add_extra_cell_detail_task = nullptr;
-			Task* add_extra_cell_detail_task2 = nullptr;
-			Task* build_solve_particle_task = nullptr;
-			std::vector<Task*> solve_particle_tasks;
+			add_extra_cell_detail_task = nullptr;
+			add_extra_cell_detail_task2 = nullptr;
+			build_solve_particle_task = nullptr;
+			solve_particle_tasks.clear();
 
 			build_solve_particle_task = task_coord->ConstructTask([&cell_partciles, &solve_particle_tasks, &task_coord, &gravity, &mFrameDeltaTime, &time_taken]()
 				{
@@ -572,7 +586,7 @@ int main()
 								{
 									///later have dependacies a collide with bounds depends 
 									///on simulate gravity as gravity simulation could cause over shoot
-									CollideParticleParticle(raw_data, cell_size);
+									//CollideParticleParticle(raw_data, cell_size);
 									SimulateGravity(gravity, mFrameDeltaTime, raw_data, cell_size);
 									CollideWithBounds(raw_data, cell_size);
 								}, 1)
@@ -660,96 +674,13 @@ int main()
 				}, 0); //kick off instantly
 
 
-
-
-			//for (int i = 0; i < cell_partciles->size(); ++i)
-			//{
-			//	std::vector<Particle>& cell = cell_partciles[i];
-			//	if (cell.size() > 1)
-			//	{
-			//		Particle* raw_data = cell.data();
-			//		uint32_t cell_size = cell.size();
-
-			//		solve_particle_tasks[i] = task_coord->ConstructTask([&raw_data, &cell_size, &gravity, &mFrameDeltaTime]()
-			//			{
-			//				///later have dependacies a collide with bounds depends 
-			//				///on simulate gravity as gravity simulation could cause over shoot
-			//				CollideParticleParticle(raw_data, cell_size);
-			//				SimulateGravity(gravity, mFrameDeltaTime, raw_data, cell_size);
-			//				CollideWithBounds(raw_data, cell_size);
-			//			}, 1); ///wait for add_extra_cell_detail_task
-			//	}
-			//}
-
-
-		
-
-			//for (auto& cell : cell_partciles)
-			//{
-			//	if (cell.size() > 1)
-			//	{
-			//		Particle* raw_data = cell.data();
-			//		uint32_t cell_size = cell.size();
-			//		task_coord->ConstructTask([&raw_data, &cell_size, &gravity, &mFrameDeltaTime]()
-			//			{
-			//					///later have dependacies a collide with bounds depends 
-			//					///on simulate gravity as gravity simulation could cause over shoot
-			//					CollideParticleParticle(raw_data, cell_size);
-			//					SimulateGravity(gravity, mFrameDeltaTime, raw_data, cell_size);
-			//					CollideWithBounds(raw_data, cell_size);
-			//			}, 0);
-			//	}
-			//}
-			//for (auto& cell : cell_partciles)
-			//{
-			//	if (cell.size() > 1)
-			//	{
-			//		Particle* raw_data = cell.data();
-			//		uint32_t cell_size = cell.size();
-			//		task_coord->ConstructTask([raw_data, cell_size, gravity, mFrameDeltaTime]()
-			//			{
-			//				///later have dependacies a collide with bounds depends 
-			//				///on simulate gravity as gravity simulation could cause over shoot
-			//				CollideParticleParticle(raw_data, cell_size);
-			//				SimulateGravity(gravity, mFrameDeltaTime, raw_data, cell_size);
-			//				CollideWithBounds(raw_data, cell_size);
-			//			}, 0);
-			//	}
-			//}
-			//for (auto& cell : cell_partciles)
-			//{
-			//	if (cell.size() > 1)
-			//	{
-			//		Particle* raw_data = cell.data();
-			//		uint32_t cell_size = cell.size();
-			//		task_coord->ConstructTask([raw_data, cell_size, gravity, mFrameDeltaTime]()
-			//			{
-			//				///later have dependacies a collide with bounds depends 
-			//				///on simulate gravity as gravity simulation could cause over shoot
-			//				CollideParticleParticle(raw_data, cell_size);
-			//				SimulateGravity(gravity, mFrameDeltaTime, raw_data, cell_size);
-			//				CollideWithBounds(raw_data, cell_size);
-			//			}, 0);
-			//	}
-			//}
-
-				////can kick of particle solving when detail are completed
-				//i = 0;
-				//for (auto& cell : cell_partciles)
-				//	if (cell.size() > 1)
-				////		solve_particle_tasks[i++]->RemoveDependency(); //this would cause N queue mutex lock as its added one after the other
-				//for (auto& task : solve_particle_tasks)
-				//	task->RemoveDependency();
-
-
-
 			task_coord->WaitForTasks();
 
 			
 			float duration_ms = time_taken.Duration();
 			system("cls");
 			//DrawASCII(partciles);
-			DrawASCII(cell_partciles);
+			//DrawASCII(cell_partciles);
 			LOG_MSG("Excution duration: " << duration_ms << "ms - " << duration_ms * 0.001 << "s\n");
 			list_duration.push_back(duration_ms);
 		}
@@ -766,10 +697,22 @@ int main()
 
 
 	float average_duration = 0.0f;
+	//bool on_side = true;
+	int on_side = 0;
 	for(const auto& duration : list_duration)
 	{
-		LOG_MSG("duration: " << duration << "ms.\n");
+		char buff[8];
+		std::snprintf(buff, sizeof(buff), "%5.2f", duration);// , ((duration - duration) * 100));
+		//std::snprintf(buff, sizeof(buff), "%02f%01f", duration);// , ((duration - duration) * 100));
+		//if(on_side)
+		if((on_side%3)==0)
+			LOG_MSG("duration: " << buff << "ms.\n");
+		else
+			LOG_MSG("duration: " << buff << "ms. " << std::setw(2) << "| ");
+
 		average_duration += float(duration);
+		//on_side ^= 1;
+		on_side++;
 	}
 	average_duration /= list_duration.size();
 	LOG_MSG("duration average: " << average_duration << "ms.\n");
@@ -777,283 +720,31 @@ int main()
 	for (auto& cell : cell_partciles)
 		cell.clear();
 
-	for (auto& p : partciles)
+	///re_run 100 times
+	static int re_run_count = 0;
+#ifdef _DEBUG
+	if (re_run_count < 20)
+#else
+	if (re_run_count < 30)
+#endif // _DEBUG
 	{
-		p.cellIdx = ParticleCellLocation(p);
-		cell_partciles[p.cellIdx].push_back(p);
+		re_run_count++;
+		std::this_thread::yield();
+		delete task_coord;
+		task_coord = nullptr;
+		goto re_run_task_loop;
 	}
-	uint32_t i = 0;
-	for (auto& cell : cell_partciles)
-		LOG_MSG("Cell " << i++ << ": " << cell.size() << "\n");
-	//bool close_program = false;
 
-	//Window window;
-	//window.Init(900, 900, true);
-	//bool mouse_cursor_lock = false;
-	//window.LockCursor(mouse_cursor_lock);
-
-	//auto Keyboard_input = [&](int key, int scancode, int action, int mods)
-	//	{
-	//		if (key == GLFW_KEY_Q && action == GLFW_PRESS)
-	//		{
-	//			window.LockCursor(mouse_cursor_lock = !mouse_cursor_lock);
-	//		}
-
-	//	};
-	//window.SetKeyboardCallback(Keyboard_input);
-
-	//while (window.IsActive())
-	//{
-	//	glClearColor(0, 0, 1, 1);
-	//	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-
-	//	window.FlushAndSwapBuffer();
-	//}
-
+	char _t;
+	LOG_MSG("Re-run: [y/n]?");
+	std::cin >> _t;
+	if (_t == 'y')
+	{
+		re_run_count = 0;
+		delete task_coord;
+		task_coord = nullptr;
+		goto re_run_task_loop;
+	}
 
 	return 0;
 }
-
-
-
-struct VertexPrimitive
-{
-	static const uint32_t kInvalidId = 0xffffffff;
-	uint32_t vao = kInvalidId;
-	uint32_t vbo = kInvalidId;
-	uint32_t ibo = kInvalidId;
-};
-
-
-
-//
-//
-//void Worker::operator()()
-//{
-//	m_JobQueue.m_LogMutex.lock();
-//	std::cout << "____    Thread " << id << " started. ____" << std::endl;
-//	m_JobQueue.m_LogMutex.unlock();
-//
-//
-//
-//	/* done (&bool)
-//	* done is a bool ref to the main program done,
-//	This allows all the worker thread to perform execution & sleep (while no work/waiting for work).
-//	* These pervent the destrustion of threads and creation of new ones every frame (expensive !!!!!!)
-//	* So the worker keeps updating and waiting for jobs --> via jobFlag.
-//	* When a job is found it locks the work queue lock mutex and trys to acquire a job from the queue, if available
-//	* Then after the job is acquire (i.e data acquistion) the workQueue is available to other threads (its lock mutex is unlock i.e released)
-//	*
-//	* Then promptly acquires the workqueue Loglock mutex to excute job and print to the console and released.
-//	* Which afterward ---> doneFlag.notify_one (notifies one waiting thread not all)
-//	*/
-//	while (!m_SysActive)
-//	{
-//		//wait to .2 of a sec for a signal. 
-//		//std::unique_lock<std::mutex> queue_mutex(m_JobPool.m_PoolMutex);
-//		std::unique_lock<std::mutex> queue_mutex(m_JobQueue.m_QueueMutex);
-//
-//
-//		/*jobFlag --> (wait until)
-//		Here I think we are using the job flag and also a unique lock with the work queue lock.
-//		So any thread with the same work queue lock would have the same signal.
-//		And the wait_until condition is to wait for a workQueue Not Done. and duration of wait is .2 of a second.
-//
-//
-//		As i have read, the .wait, wait_for, wait_until, where current thread and all other thread instance acquire
-//		then atomically release the mutex lock and suspend thread excution if for or until for set duration(timeout),
-//		or condition notification*/
-//		/* condition_variable  .wait
-//		is used to wait/hault a current thread until the condition is met. the current must hold/share mutex with */
-//
-//		m_JobQueue.m_JobFlag.wait(queue_mutex, [this] {return !m_JobQueue.IsEmpty() ||
-//			m_SysActive; });
-//
-//
-//		//Exit if system is shutting down
-//		if (m_SysActive) break;
-//
-//		Job* pending_job = m_JobQueue.Dequeue();
-//		queue_mutex.unlock();
-//
-//		if (pending_job)
-//		{
-//			pending_job->Execute();
-//			delete pending_job;
-//		}
-//		m_JobQueue.m_NotEmptyFlag.notify_one();
-//		//m_JobPool.m_LogMutex.lock();
-//		////std::cout << "____    Thread " << id << " Waiting for Jobs. _____" << std::endl;
-//		////m_JobPool.m_LogMutex.unlock();
-//
-//		//if (access)
-//		//{
-//		//	Job* pending_job = m_JobQueue.NextJob();
-//
-//		//	//pop get the first job and pop it from the queue.
-//		//	if (!pending_job) // <--- the job might have been empty 
-//		//		continue;
-//
-//		//	//release lock (a unique ref to the work queue lock) 
-//		//	//m_JobQueue.m_JobFlag.notify_all();
-//
-//		//	//m_JobQueue.m_LogMutex.lock();
-//		//	pending_job->Execute();
-//		//	delete pending_job;
-//		//	//std::cout << " by thread " << id << std::endl;
-//		//	//m_JobQueue.m_LogMutex.unlock();
-//		//	m_JobQueue.m_CompleteJobsFlag.notify_one();
-//		//}
-//	}
-//
-//	m_JobQueue.m_LogMutex.lock();
-//	std::cout << "____    Thread " << id << " done. _____" << std::endl;
-//	m_JobQueue.m_LogMutex.unlock();
-//}
-//
-//
-//void JobQueue::Enqueue(Job* job)
-//{
-//
-//	//lock queue condition variable from access
-//	//when adding to the queue
-//	std::lock_guard<std::mutex> queue_mutex(m_QueueMutex);
-//
-//	m_Queue.push_back(job);
-//	//signal/notify threads waiting on flag
-//	m_NotEmptyFlag.notify_one();
-//	m_JobFlag.notify_one();
-//}
-//
-//Job* JobQueue::Dequeue()
-//{
-//	//std::unique_lock<std::mutex> queue_mutex(m_QueueMutex);
-//	////thread waits and when the condition variable m_NotEmptyFlag is signaled/notified 
-//	////the argument/codition is checked  [this]() {return !m_Queue.empty(); 
-//	//m_NotEmptyFlag.wait(queue_mutex, [this]() {return !m_Queue.empty(); });
-//
-//	Job* job = m_Queue.front();
-//	m_Queue.pop_front();
-//	return job;
-//}
-//
-//bool JobQueue::IsEmpty()
-//{
-//	//std::lock_guard<std::mutex> queue_mutex(m_QueueMutex);
-//	return m_Queue.empty();
-//}
-//
-//
-//void JobSystem::Update()
-//{
-//
-//	/*JobFlag --> (notify all)
-//	I Think this is a flag to notify that a job is avaliable to be exceuted.
-//	And with notify all is to notify all threads with the flag (conditional variable).*/
-//
-//	std::unique_lock<std::mutex> queue_mutex(m_Queue.m_QueueMutex);
-//	/* .wait condition_variable on the woek queue lock mutex
-//	These puts this thread (main thread in this case) to sleep waiting for thread with the unique mutex
-//	from workQueue.lock.*/
-//	//recivce doneflag signal & the queue is done to move on
-//	m_Queue.m_NotEmptyFlag.wait(queue_mutex, [&] {return m_Queue.IsEmpty(); });  //<----- This should block the main thread to wait for all othre thread
-//
-//
-//	m_Queue.m_LogMutex.lock();
-//	std::cout << "Thread Work finished !!!!!!!\n";
-//	m_Queue.m_LogMutex.unlock();
-//
-//	//
-//	///* done
-//	//flag for program completion, which is shared by all threads. 
-//	//That keeps them spinning/updating and operation their would stop when program is done*/
-//	////sleep = true;
-//
-//	//for (size_t i = 0; i < m_NumWorker; ++i)
-//	//	m_WorkerThread[i].join();
-//
-//
-//
-//
-//
-//
-//#include <iostream>
-//#include <mutex>
-//#include <vector>
-//#include <queue>
-//
-//class Job
-//{
-//public:
-//	Job* next = nullptr;
-//	virtual void Execute() = 0;
-//};
-//
-//
-//
-//class JobQueue
-//{
-//public:
-//	std::mutex m_QueueMutex;
-//	std::mutex m_LogMutex;
-//
-//	std::condition_variable m_JobFlag;
-//	std::condition_variable m_NotEmptyFlag;
-//
-//	void Enqueue(Job* job);
-//	Job* Dequeue();
-//	bool IsEmpty();
-//
-//private:
-//	std::deque<Job*> m_Queue = std::deque<Job*>();
-//};
-//
-//class Worker
-//{
-//private:
-//	unsigned int id;
-//	bool& m_SysActive;
-//	JobQueue& m_JobQueue;
-//
-//public:
-//	Worker(JobQueue& job_queue, bool& alive, unsigned int _id)
-//		: m_JobQueue(job_queue), m_SysActive(alive), id(_id) {
-//	}
-//	void operator()();
-//};
-//
-//class JobSystem
-//{
-//private:
-//	std::vector<std::thread> m_WorkerThread;
-//	unsigned int m_NumWorker = 0;
-//
-//	JobQueue m_Queue;
-//	bool quit = false;
-//
-//public:
-//	JobSystem() = default;
-//	JobSystem(unsigned int num_worker) : m_NumWorker(num_worker)
-//	{
-//
-//		m_WorkerThread.reserve(num_worker);
-//		for (size_t i = 0; i < m_NumWorker; ++i)
-//			m_WorkerThread.push_back(std::thread(Worker(m_Queue, quit, i)));
-//	}
-//
-//
-//	void NewJob(Job* job)
-//	{
-//		m_Queue.Enqueue(job);
-//	}
-//
-//	void Update();
-//
-//	void Quit()
-//	{
-//		quit = true;
-//		for (size_t i = 0; i < m_NumWorker; ++i)
-//			m_WorkerThread[i].join();
-//	}
-//};
