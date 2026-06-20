@@ -10,7 +10,7 @@
 #include <mutex>
 
 #define DEBUG_THREAD 0
-#define DISABLE_THREAD_LOG 0
+#define DISABLE_THREAD_LOG 1
 
 #if DISABLE_THREAD_LOG
 #define THREAD_LOG_MSG(mutex, msg) 
@@ -39,7 +39,7 @@
 //}
 //
 
-#define LOCKFREE_CAS_QUEUE 0
+#define LOCKFREE_CAS_QUEUE 1
 #if LOCKFREE_CAS_QUEUE
 #include <array>
 #endif // LOCKFREE_CAS_QUEUE
@@ -265,6 +265,13 @@ public:
 		}
 	}
 
+	/// behaves as a sub task, where a thread/task 
+/// break works down to be process 
+	void ParallelFor(TaskCoordinator* coord)
+	{
+
+
+	}
 
 	void RemoveTasksDependency(Task** tasks, uint32_t task_count)
 	{
@@ -329,6 +336,12 @@ private:
 	}
 	void SignalMainThread(size_t task_count);
 
+	void PokeWorkers()
+	{
+		mTaskAvailable.notify_all();
+		mMainWaitFlag.notify_one();
+	}
+
 	/// it should be easy to check if a task belong to 
 	/// task coordinator. 
 	/// by using it pointer address 
@@ -350,6 +363,8 @@ private:
 	std::condition_variable mMainWaitFlag;
 
 
+
+
 	/// pending tasks
 #if LOCKFREE_CAS_QUEUE
 	static constexpr uint32_t kMaxTaskQueue = 1024; //need to be power of 2 to support wrapping
@@ -360,7 +375,9 @@ private:
 
 	/// mainly used to access the Main thread task head
 	uint32_t mNumWorkerThread = 0;
-	uint32_t mThreadTaskHead[kMaxThreads + 1]; //extra space to main thread, during task waiting
+	std::atomic<uint32_t> mThreadTaskHead[kMaxThreads + 1]; //extra space to main thread, during task waiting
+	static_assert(std::is_integral_v<std::remove_reference_t<decltype(mThreadTaskHead[0])>::value_type>);
+	static_assert(sizeof(mThreadTaskHead[0]) == 4);
 
 	/// min head, based on the firtst/small thread head
 	/// to ensure task gravitates around thread scan window
@@ -370,10 +387,7 @@ private:
 	{
 		uint32_t temp = mThreadTaskHead[0];
 		for (int i = 1; i < mWorkers.size() + 1; ++i) //+1 as the main thread uses the slot to last work thread
-		{
-			temp = std::min(pending_task_head, mThreadTaskHead[i]);
-		}
-
+			temp = std::min(temp, mThreadTaskHead[i].load());
 		return temp;
 	}
 #else
