@@ -586,7 +586,7 @@ int main()
 								{
 									///later have dependacies a collide with bounds depends 
 									///on simulate gravity as gravity simulation could cause over shoot
-									//CollideParticleParticle(raw_data, cell_size);
+									CollideParticleParticle(raw_data, cell_size);
 									SimulateGravity(gravity, mFrameDeltaTime, raw_data, cell_size);
 									CollideWithBounds(raw_data, cell_size);
 								}, 1)
@@ -702,7 +702,7 @@ int main()
 	for(const auto& duration : list_duration)
 	{
 		char buff[8];
-		std::snprintf(buff, sizeof(buff), "%5.2f", duration);// , ((duration - duration) * 100));
+		std::snprintf(buff, sizeof(buff), "%6.2f", duration);// , ((duration - duration) * 100));
 		//std::snprintf(buff, sizeof(buff), "%02f%01f", duration);// , ((duration - duration) * 100));
 		//if(on_side)
 		if((on_side%3)==0)
@@ -723,9 +723,9 @@ int main()
 	///re_run 100 times
 	static int re_run_count = 0;
 #ifdef _DEBUG
-	if (re_run_count < 20)
+	if (re_run_count < 35)
 #else
-	if (re_run_count < 30)
+	if (re_run_count < 50)
 #endif // _DEBUG
 	{
 		re_run_count++;

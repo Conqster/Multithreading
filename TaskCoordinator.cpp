@@ -465,7 +465,7 @@ void TaskCoordinatorThreads::WaitForTasks()
 
 	mMainThreadWaitingTask = true;
 	//for helping out 
-	_TaskBase* task;
+	Task* task;
 
 	///later while waiting for task 
 	///also support quit break as well

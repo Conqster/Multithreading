@@ -52,30 +52,18 @@ class TaskCoordinatorThreads;
 
 using TaskFunction = std::function<void()>;
 
-class _TaskBase
-{
-public:
-	_TaskBase(TaskFunction _func) : mFunc(_func) {}
 
-	virtual bool Process() = 0;
-	virtual ~_TaskBase() = default;
-protected:
-	friend TaskCoordinatorSequential;
-	friend TaskCoordinatorThreads;
-	TaskFunction mFunc;
-};
-
-class Task : public _TaskBase
+class Task 
 {
 public:
 	Task() = delete;
 	Task(TaskCoordinator* coordinator, const TaskFunction& _func, uint32_t _dependancies) :
-		_TaskBase(_func), mCoordinator(coordinator), mDependencies(_dependancies) {}
+		mFunc(_func), mCoordinator(coordinator), mDependencies(_dependancies) {}
 
 	void IncrementDependency() { mDependencies.fetch_add(1, std::memory_order_relaxed);}
 	void RemoveDependency();
 
-	bool Process() override
+	bool Process()
 	{
 		if (mDependencies.load(std::memory_order_relaxed) > 0)
 			return false;
@@ -95,23 +83,11 @@ private:
 		return _v == 0;
 	}
 
+	TaskFunction mFunc;
 	TaskCoordinator* mCoordinator = nullptr;
 	std::atomic<uint32_t> mDependencies = 0;
 };
 
-class SubTask : public _TaskBase
-{
-public:
-	SubTask() = delete;
-	SubTask(TaskFunction _func) : _TaskBase(_func) {}
-
-	bool Process() override
-	{
-		mFunc();
-		//successfully complete task
-		return true;
-	}
-};
 
 class TaskCoordinator : public NonCopyable
 {
