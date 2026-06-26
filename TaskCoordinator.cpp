@@ -88,7 +88,7 @@ void TaskCoordinatorThreads::EndThreads()
 }
 
 #include <windows.h>
-void SetThreadName(const char* threadName)
+void SetThreadNameVS(const char* threadName)
 {
 	const DWORD MS_VC_EXCEPTION = 0x406D1388;
 
@@ -122,6 +122,7 @@ void SetThreadName(const char* threadName)
 }
 
 #include <string>
+#include "tracy/tracy/Tracy.hpp"
 void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 {
 	THREAD_LOG_MSG(mThreadLogMutex, "About to commence worker thread idx: " << thread_worker_idx << " my os id " << std::this_thread::get_id() << "\n");
@@ -129,7 +130,10 @@ void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 	{
 		std::string _name = "Worker Thread ";
 		_name += std::to_string(thread_worker_idx);
-		SetThreadName(_name.c_str());
+#if TRACY_ENABLE
+		tracy::SetThreadName(_name.c_str());
+#endif // TRACY_ENABLE
+		SetThreadNameVS(_name.c_str());
 	}
 
 

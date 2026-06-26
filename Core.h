@@ -5,6 +5,10 @@
 #define LOG_MSG(x) std::cout<<x
 #define ASSERT _ASSERT
 
+
+#define PROFILE_SCOPE ZoneScoped
+
+
 class NonCopyable
 {
 public: 

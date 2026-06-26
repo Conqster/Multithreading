@@ -40,7 +40,10 @@
 //
 
 #define LOCKFREE_CAS_QUEUE 1
+<<<<<<< Updated upstream
 #define USE_TASK_CONSTURCT_BUFF 1
+=======
+>>>>>>> Stashed changes
 #if LOCKFREE_CAS_QUEUE
 #include <array>
 #endif // LOCKFREE_CAS_QUEUE

@@ -7,6 +7,8 @@
 #define NOMINMAX
 #include "Window.h"
 
+#include "libs/tracy/tracy/Tracy.hpp"
+//#define TRACY_ENABLE //inside globall, propertites C/C++ preprocessor Definitions
 
 
 struct ProgramContext
@@ -137,6 +139,7 @@ struct GridCell
 
 int ParticleCellLocation(const Particle& p)
 {
+	PROFILE_SCOPE;
 	Vec2 grid_half_size = Vec2(100, 50) * 2;
 
 	Vec2 ratio = p.position / grid_half_size;
@@ -160,6 +163,7 @@ int ParticleCellLocation(const Particle& p)
 
 void CollideWithBounds(Particle& p)
 {
+	PROFILE_SCOPE;
 	Vec2 abs_pos = p.position.Abs();
 
 	Vec2 dir = Vec2(1.0f);
@@ -209,6 +213,7 @@ void CollideWithBounds(Particle& p)
 
 void CollideWithBounds(Particle* particles, uint32_t count)
 {
+	PROFILE_SCOPE;
 	ASSERT(count > 1);
 
 	///Bruteforce N squared 
@@ -223,6 +228,7 @@ void CollideWithBounds(Particle* particles, uint32_t count)
 
 static void CollideParticleParticle(Particle* particles, uint32_t count)
 {
+	PROFILE_SCOPE;
 	ASSERT(count > 1);
 
 	//TimeTaken _time;
@@ -262,6 +268,7 @@ static void CollideParticleParticle(Particle* particles, uint32_t count)
 
 void SimulateGravity(Particle& p, const Vec2& gravity_force, float dt)
 {
+	PROFILE_SCOPE;
 	Vec2 acc = gravity_force;
 
 	Vec2 vel = acc *dt;
@@ -286,6 +293,7 @@ void SimulateGravity(Particle& p, const Vec2& gravity_force, float dt)
 
 void SimulateGravity(const Vec2& gravity_force, float dt, Particle* particles, uint32_t count)
 {
+	PROFILE_SCOPE;
 	ASSERT(count > 1);
 
 	Vec2 acc = gravity_force;
@@ -318,6 +326,7 @@ void SimulateGravity(const Vec2& gravity_force, float dt, Particle* particles, u
 
 void DrawASCII(const Particle& p)
 {
+	PROFILE_SCOPE;
 	int particle_cell_count = 0;
 
 	for (int r = 0; r < 4; ++r)
@@ -349,6 +358,7 @@ void DrawASCII(const Particle& p)
 
 void DrawASCII(const std::vector<Particle>& particles)
 {
+	PROFILE_SCOPE;
 	///idx0
 	///idx1
 	/// idx2 
@@ -513,6 +523,7 @@ int main()
 	//job_coord.BeginThreads(num_threads);
 	for (int i = 0; i < 100; ++i)
 	{
+		FrameMark;
 		double curr_frame_time = glfwGetTime();
 		double mFrameDeltaTime = curr_frame_time - mLastFrameTime;
 		mLastFrameTime = curr_frame_time;
