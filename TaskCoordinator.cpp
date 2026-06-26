@@ -190,7 +190,12 @@ void TaskCoordinatorThreads::ThreadsMainLoop(int thread_worker_idx)
 					SignalMainThread(1);
 
 				//might have to delete heap allocated 
+#if USE_TASK_CONSTURCT_BUFF
+				mTaskBuffer.Deconstruct(task);
+#else
 				delete task;
+#endif // USE_TASK_CONSTURCT_BUFF
+
 				THREAD_LOG_MSG(mThreadLogMutex, "____    Thread " << thread_worker_idx << " complete a Task. _____ Task Active: " << mProcessingTasks.load(std::memory_order_relaxed) << ".\n");
 			}
 			mThreadTaskHead[thread_worker_idx]++; //progress
@@ -558,8 +563,12 @@ void TaskCoordinatorThreads::WaitForTasks()
 				//we are done processing 
 				mProcessingTasks.fetch_sub(1, std::memory_order_relaxed);
 
+#if USE_TASK_CONSTURCT_BUFF
+				mTaskBuffer.Deconstruct(task);
+#else
 				//might have to delete heap allocated 
 				delete task;
+#endif // USE_TASK_CONSTURCT_BUFF
 				THREAD_LOG_MSG(mThreadLogMutex, "____    MainThread complete a task._____\n");
 			}
 			mThreadTaskHead[mNumWorkerThread]++; //progress

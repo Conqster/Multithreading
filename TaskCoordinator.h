@@ -40,6 +40,7 @@
 //
 
 #define LOCKFREE_CAS_QUEUE 1
+#define USE_TASK_CONSTURCT_BUFF 1
 #if LOCKFREE_CAS_QUEUE
 #include <array>
 #endif // LOCKFREE_CAS_QUEUE
@@ -214,6 +215,9 @@ public:
 	TaskCoordinatorThreads(int thread_count = -1) //: mNumThread(thread_count) 
 	{
 		BeginThreads(thread_count);
+#if USE_TASK_CONSTURCT_BUFF
+		mTaskBuffer.Init(kMaxTaskQueue * 2);
+#endif // USE_TASK_CONSTURCT_BUFF
 	}
 
 	~TaskCoordinatorThreads() { EndThreads(); }
@@ -297,6 +301,10 @@ private:
 
 	Task* ConstructTaskInternal(TaskFunction task_func, uint32_t dependencies)
 	{
+#if USE_TASK_CONSTURCT_BUFF
+		return mTaskBuffer.ConstructPtr(this, task_func, dependencies);
+#endif // USE_TASK_CONSTURCT_BUFF
+
 		//#define USE_TASK_BUFFER
 		return new Task(this, task_func, dependencies);
 	}
@@ -400,31 +408,133 @@ private:
 			std::atomic<uint32_t> nextFree;
 		};
 		static_assert(alignof(BufferData) == alignof(Task));
+		static_assert(offsetof(BufferData, taskData) == 0, "");
 	public:
 		void Init(size_t max_task)
 		{
-			mMax = max_task;
+			mMax = static_cast<uint32_t>(max_task);
 			//mBuffer = new BufferData[max_task]; //no default constructot 
 			mBuffer = reinterpret_cast<BufferData*>(new uint8_t[sizeof(BufferData) * max_task]);
 		}
 
-		/// just in case
-		template<typename ...Params>
-		uint32_t Construct(Params&&... params)
-		{
-
-		}
-
 		~TaskBuffer()
 		{
-			delete[] mBuffer;
+			//delete[] mBuffer;
+			delete[] reinterpret_cast<uint8_t*>(mBuffer);
 		}
+
+		/// just in case
+		template<typename ...Params>
+		uint32_t Construct(Params &&... params)
+		{
+			for(;;)
+			{
+				///this remove the index (the slot) 
+				/// of the constructed data in list so 
+				/// its easy to get the data
+				/// 
+				/// lets try the free list
+				/// capute the next free slot
+				uint32_t capture_nxt_free = mFirstNextFree.load(std::memory_order_acquire);
+				/// either the failed to free list / on free list 
+				if (capture_nxt_free == kInvalidSlot)
+				{
+					///need to move pointer up
+					uint32_t top = mBufferTop.load(std::memory_order_relaxed);
+					if (top >= mMax)return kInvalidSlot;
+
+					if (mBufferTop.compare_exchange_weak(top, top + 1,std::memory_order_acquire, std::memory_order_relaxed))
+					{
+						BufferData& buff_data = mBuffer[top];
+						new (&buff_data.taskData) Task(std::forward<Params>(params)...);
+						buff_data.nextFree.store(top, std::memory_order_relaxed); 
+						return top;
+					}
+				}
+				else
+				{
+					///we found a free slot 
+					///has a successful slot 
+					BufferData& buff_data = mBuffer[capture_nxt_free];
+					uint32_t nxt_nxt_slot = buff_data.nextFree.load(std::memory_order_acquire);
+					///try CAS, as to prevent race condition
+					if (mFirstNextFree.compare_exchange_weak(capture_nxt_free, nxt_nxt_slot, std::memory_order_acquire, std::memory_order_relaxed)) //ensure fail, expect old cap, desire new (nxt nxt)
+					{
+						new (&buff_data.taskData) Task(std::forward<Params>(params)...);
+						///slot ?(next free), point to self for easy deconstruct via Task* 
+						buff_data.nextFree.store(capture_nxt_free, std::memory_order_relaxed);
+						return capture_nxt_free;
+					}
+				}
+			}
+		}
+
+		template<typename ...Params>
+		Task* ConstructPtr(Params&&... params) { return Get(Construct((params)...)); }
+
+
+		void Deconstruct(uint32_t slot_idx)
+		{
+			//easy to swap next first free
+
+			ASSERT(slot_idx < mBufferTop);
+
+			BufferData& deconstruct_buff_data = mBuffer[slot_idx];
+			deconstruct_buff_data.taskData.~Task();
+
+			///so new deconstruting buff need to point to an invlaid 
+			/// next free/ 
+			/// later could, point to self
+			ASSERT(deconstruct_buff_data.nextFree == slot_idx);
+
+			for(;;)
+			{
+				////try get the next free if vaild to ensure no race condition 
+				uint32_t capture_prev_nxt_free = mFirstNextFree.load(std::memory_order_acquire);
+
+				//link node internallt first whill it is private 
+				deconstruct_buff_data.nextFree.store(capture_prev_nxt_free, std::memory_order_relaxed);
+				//if (capture_prev_nxt_free != kInvalidSlot)
+				//{
+				//	BufferData& nxt_free_buff = mBuffer[capture_prev_nxt_free];
+
+				//}
+				//mFirstNextFree.store(slot_idx, std::memory_order_release);
+				if (mFirstNextFree.compare_exchange_weak(capture_prev_nxt_free, slot_idx, std::memory_order_release, std::memory_order_relaxed))
+					return;
+			}
+		}
+
+
+		void Deconstruct(Task* task)
+		{
+			//check if we own address
+			const uint8_t* _addr = reinterpret_cast<const uint8_t*>(task);
+			const uint8_t* buff_addr = reinterpret_cast<const uint8_t*>(mBuffer);
+			ASSERT(_addr >= buff_addr && _addr < buff_addr + (mMax * sizeof(BufferData)));
+
+			///actuall if the address of Task == its BufferData 
+			///then if the next free points to self then we can get the slot idx 
+			BufferData* buff_data = reinterpret_cast<BufferData*>(task);
+			uint32_t slot = buff_data->nextFree.load(std::memory_order_relaxed);
+			Deconstruct(slot);
+		}
+
+		/// need to be able to 
+		/// be align to that the address of 
+		/// BufferData == Task (its task) 
+		/// for easy conversion
+		Task* Get(uint32_t idx) const { return &mBuffer[idx].taskData; }
 	private:
-		BufferData* mBuffer;
-		uint32_t mMax;
-		std::atomic<uint32_t> mFirstNextFree;
+		BufferData* mBuffer = nullptr;
+		uint32_t mMax = 0;
+		uint32_t kInvalidSlot = 0xffffffff;
+		std::atomic<uint32_t> mFirstNextFree{ 0xffffffff };
+		std::atomic<uint32_t> mBufferTop{ 0 };
 	};
 
+
+	TaskBuffer mTaskBuffer;
 	bool mMainThreadWaitingTask = false;
 
 	/// current task been processed by threads
