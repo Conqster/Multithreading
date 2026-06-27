@@ -40,10 +40,7 @@
 //
 
 #define LOCKFREE_CAS_QUEUE 1
-<<<<<<< Updated upstream
-#define USE_TASK_CONSTURCT_BUFF 1
-=======
->>>>>>> Stashed changes
+#define USE_TASK_CONSTURCT_BUFF 0
 #if LOCKFREE_CAS_QUEUE
 #include <array>
 #endif // LOCKFREE_CAS_QUEUE
@@ -314,8 +311,8 @@ private:
 
 	__forceinline void SignalAvailableTask(size_t task_count)
 	{
-		//mTaskAvailable.notify_all();
-		//return;
+		mTaskAvailable.notify_all();
+		return;
 		if (task_count > 1)
 			mTaskAvailable.notify_all();
 		else
@@ -473,7 +470,7 @@ private:
 		}
 
 		template<typename ...Params>
-		Task* ConstructPtr(Params&&... params) { return Get(Construct((params)...)); }
+		Task* ConstructPtr(Params&&... params) { return Get(Construct(std::forward<Params>(params)...)); }
 
 
 		void Deconstruct(uint32_t slot_idx)

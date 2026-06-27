@@ -6,7 +6,8 @@
 #define ASSERT _ASSERT
 
 
-#define PROFILE_SCOPE ZoneScoped
+#define PROFILE_FUNCTION ZoneScoped
+#define PROFILE_SCOPE(name) ZoneScopedN(name)
 
 
 class NonCopyable

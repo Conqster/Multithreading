@@ -139,7 +139,7 @@ struct GridCell
 
 int ParticleCellLocation(const Particle& p)
 {
- 	PROFILE_FUNCTION;
+	PROFILE_FUNCTION;
 	Vec2 grid_half_size = Vec2(100, 50) * 2;
 
 	Vec2 ratio = p.position / grid_half_size;
@@ -623,26 +623,26 @@ int main()
 					{
 
 
-					for (auto& p : partciles)
-					{
-						p.cellIdx = ParticleCellLocation(p) + 32;
-						cell_partciles[p.cellIdx].push_back(p);
-					}
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p) + 32;
+							//if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
 
-					for (auto& p : partciles)
-					{
-						p.cellIdx = ParticleCellLocation(p) + 48;
-						cell_partciles[p.cellIdx].push_back(p);
-					}
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p) + 48;
+							//if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
 
-					for (auto& p : partciles)
-					{
-						p.cellIdx = ParticleCellLocation(p) + 64;
-						cell_partciles[p.cellIdx].push_back(p);
-					}
-					
-					build_solve_particle_task->RemoveDependency();
-				}, 1); //depends on clear task
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p) + 64;
+							///if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
 
 						build_solve_particle_task->RemoveDependency();
 					}, 1); //depends on clear task
@@ -650,18 +650,26 @@ int main()
 
 				add_extra_cell_detail_task2 = task_coord->ConstructTask([&partciles, &cell_partciles, build_solve_particle_task]() ///&build_solve_particle_task pass by ref for now 
 					{
-						p.cellIdx = ParticleCellLocation(p) + 96;
-						cell_partciles[p.cellIdx].push_back(p);
-					}
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p) + 80;
+							//if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
 
-					for (auto& p : partciles)
-					{
-						p.cellIdx = ParticleCellLocation(p) + 112;
-						cell_partciles[p.cellIdx].push_back(p);
-					}
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p) + 96;
+							//if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
 
-					build_solve_particle_task->RemoveDependency();
-				}, 1); //depends on clear task
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p) + 112;
+							//if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
 
 						build_solve_particle_task->RemoveDependency();
 					}, 1); //depends on clear task
@@ -676,11 +684,19 @@ int main()
 							//cell.reserve(2000);
 						}
 
-					for (auto& p : partciles)
-					{
-						p.cellIdx = ParticleCellLocation(p) + 16;
-						cell_partciles[p.cellIdx].push_back(p);
-					}
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p);
+							//if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
+
+						for (auto& p : partciles)
+						{
+							p.cellIdx = ParticleCellLocation(p) + 16;
+							//if (cell_partciles[p.cellIdx].size() >= 1000) break;
+							cell_partciles[p.cellIdx].push_back(p);
+						}
 
 						add_extra_cell_detail_task->RemoveDependency(); //the two are writing to the same buffer, but different offset
 						add_extra_cell_detail_task2->RemoveDependency();

@@ -107,12 +107,8 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions);_CRT_SECURE_NO_WARNINGS;TRACY_ENABLE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-<<<<<<< Updated upstream
-      <AdditionalIncludeDirectories>$(ProjectDir)libs\glfw\include;$(ProjectDir)libs\glew\glew-2.1.0\include;$(ProjectDir)libs;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <SupportJustMyCode>false</SupportJustMyCode>
-=======
       <AdditionalIncludeDirectories>$(ProjectDir)libs\glfw\include;$(ProjectDir)libs\glew\glew-2.1.0\include;$(ProjectDir)libs;tracy/public;%(AdditionalIncludeDirectories);tracy/public</AdditionalIncludeDirectories>
->>>>>>> Stashed changes
+      <SupportJustMyCode>false</SupportJustMyCode>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
